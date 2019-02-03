@@ -67,6 +67,34 @@ int main()
                 assert(0);
             }
         }
+
+        shared_file_view.unmap();
+
+        mio::mmap_sink rw_file_view = mio::make_mmap_sink(
+                path, 0, mio::map_entire_file, error);
+
+        if(error) { return handle_error(error); }
+
+        assert(!shared_file_view.is_open());
+        assert(rw_file_view.is_open());
+        assert(rw_file_view.size() == buffer.size());
+
+        buffer = buffer.substr(0x2000, std::string::npos);
+        buffer[buffer.size()-1] = 'N';
+        buffer.append("N");
+
+        rw_file_view.remap(0x2000, buffer.size(), error);
+
+        strcpy(rw_file_view.begin(), buffer.c_str());
+
+        // Then verify that mmap's bytes correspond to that of buffer.
+        for(auto i = 0; i < buffer.size(); ++i) {
+            if(rw_file_view[i] != buffer[i]) {
+                std::printf("%ith byte mismatch: expected(%i) <> actual(%i)",
+                        i, buffer[i], rw_file_view[i]);
+                assert(0);
+            }
+        }
     }
 
     {

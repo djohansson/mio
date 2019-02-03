@@ -210,6 +210,67 @@ inline mmap_context memory_map(const file_handle_type file_handle, const int64_t
     return ctx;
 }
 
+inline mmap_context memory_remap(
+    const file_handle_type file_handle, void* old_address, const int64_t old_length,
+    const int64_t new_offset, const int64_t new_length, const access_mode mode, std::error_code& error)
+{
+    const int64_t aligned_offset = make_offset_page_aligned(new_offset);
+    const int64_t length_to_map = new_offset - aligned_offset + new_length;
+#ifdef _WIN32
+    const int64_t max_file_size = new_offset + new_length;
+    const auto file_mapping_handle = ::CreateFileMapping(
+            file_handle,
+            0,
+            mode == access_mode::read ? PAGE_READONLY : PAGE_READWRITE,
+            win::int64_high(max_file_size),
+            win::int64_low(max_file_size),
+            0);
+    if(file_mapping_handle == invalid_handle)
+    {
+        error = detail::last_error();
+        return {};
+    }
+    char* mapping_start = static_cast<char*>(::MapViewOfFile(
+            file_mapping_handle,
+            mode == access_mode::read ? FILE_MAP_READ : FILE_MAP_WRITE,
+            win::int64_high(aligned_offset),
+            win::int64_low(aligned_offset),
+            length_to_map));
+    if(mapping_start == nullptr)
+    {
+        error = detail::last_error();
+        return {};
+    }
+#else // POSIX
+    char* mapping_start = static_cast<char*>(::mmap(
+            old_address,
+            length_to_map,
+            mode == access_mode::read ? PROT_READ : PROT_WRITE,
+            MAP_SHARED,
+            file_handle,
+            aligned_offset));
+    // TODO:
+    // char* mapping_start = static_cast<char*>(::mremap(
+    //         old_address,
+    //         old_length,
+    //         length_to_map,
+    //         MREMAP_MAYMOVE));
+    if(mapping_start == MAP_FAILED)
+    {
+        error = detail::last_error();
+        return {};
+    }
+#endif
+    mmap_context ctx;
+    ctx.data = mapping_start + new_offset - aligned_offset;
+    ctx.length = new_length;
+    ctx.mapped_length = length_to_map;
+#ifdef _WIN32
+    ctx.file_mapping_handle = file_mapping_handle;
+#endif
+    return ctx;
+}
+
 } // namespace detail
 
 // -- basic_mmap --
@@ -419,6 +480,50 @@ void basic_mmap<AccessMode, ByteT>::unmap()
 #ifdef _WIN32
     file_mapping_handle_ = invalid_handle;
 #endif
+}
+
+template<access_mode AccessMode, typename ByteT>
+template<access_mode A>
+typename std::enable_if<A == access_mode::write, void>::type
+basic_mmap<AccessMode, ByteT>::remap(const size_type new_offset, size_type new_size, std::error_code& error)
+{
+    error.clear();
+    if(!is_open()) { return; }
+    
+    const auto file_size = detail::query_file_size(file_handle_, error);
+    if(error)
+    {
+        return;
+    }
+
+#ifdef _WIN32
+    if(is_mapped())
+    {
+        ::UnmapViewOfFile(get_mapping_start());
+        ::CloseHandle(file_mapping_handle_);
+    }
+#else // POSIX
+    if(data_) { ::munmap(const_cast<pointer>(get_mapping_start()), mapped_length_); }
+#endif
+
+#ifndef _WIN32
+    if (new_offset + new_size > file_size)
+    {
+        ftruncate(file_handle_, new_offset + new_size);
+    }
+#endif
+
+    const auto ctx = detail::memory_remap(file_handle_, data_, length_, new_offset, new_size, AccessMode, error);
+    if(!error)
+    {
+        is_handle_internal_ = true;
+        data_ = reinterpret_cast<pointer>(ctx.data);
+        length_ = ctx.length;
+        mapped_length_ = ctx.mapped_length;
+#ifdef _WIN32
+        file_mapping_handle_ = ctx.file_mapping_handle;
+#endif
+    }
 }
 
 template<access_mode AccessMode, typename ByteT>
