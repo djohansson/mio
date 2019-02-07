@@ -63,7 +63,7 @@ template<
             mode == access_mode::read ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             0,
-            OPEN_EXISTING,
+            OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             0);
 }
@@ -78,7 +78,7 @@ typename std::enable_if<
             mode == access_mode::read ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             0,
-            OPEN_EXISTING,
+            OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             0);
 }
@@ -101,29 +101,6 @@ inline std::error_code last_error() noexcept
     return error;
 }
 
-template<typename String>
-file_handle_type open_file(const String& path, const access_mode mode,
-        std::error_code& error)
-{
-    error.clear();
-    if(detail::empty(path))
-    {
-        error = std::make_error_code(std::errc::invalid_argument);
-        return invalid_handle;
-    }
-#ifdef _WIN32
-    const auto handle = win::open_file_helper(path, mode);
-#else // POSIX
-    const auto handle = ::open(c_str(path),
-            mode == access_mode::read ? O_RDONLY : O_RDWR);
-#endif
-    if(handle == invalid_handle)
-    {
-        error = detail::last_error();
-    }
-    return handle;
-}
-
 inline int64_t query_file_size(file_handle_type handle, std::error_code& error)
 {
     error.clear();
@@ -144,6 +121,46 @@ inline int64_t query_file_size(file_handle_type handle, std::error_code& error)
     }
     return sbuf.st_size;
 #endif
+}
+
+template<typename String>
+file_handle_type open_file(const String& path, const access_mode mode,
+        std::error_code& error)
+{
+    error.clear();
+    if(detail::empty(path))
+    {
+        error = std::make_error_code(std::errc::invalid_argument);
+        return invalid_handle;
+    }
+#ifdef _WIN32
+    const auto handle = win::open_file_helper(path, mode);
+#else // POSIX
+    const auto handle = ::open(c_str(path),
+            mode == access_mode::read ? O_RDONLY : O_CREAT | O_RDWR);
+#endif
+    if(handle == invalid_handle)
+    {
+        error = detail::last_error();
+        return invalid_handle;
+    }
+
+    if (mode == access_mode::write)
+    {
+        if (query_file_size(handle, error) == 0 && !error)
+        {
+            void* buffer = ::alloca(page_size());
+            if (!buffer ||
+                ::write(handle, buffer, page_size()) == -1 ||
+                fchmod(handle, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH) == -1)
+            {
+                error = detail::last_error();
+                return invalid_handle;
+            }
+        }
+    }
+
+    return handle;
 }
 
 struct mmap_context
@@ -216,8 +233,8 @@ inline mmap_context memory_remap(
 {
     const int64_t aligned_offset = make_offset_page_aligned(new_offset);
     const int64_t length_to_map = new_offset - aligned_offset + new_length;
-#ifdef _WIN32
     const int64_t max_file_size = new_offset + new_length;
+#ifdef _WIN32
     const auto file_mapping_handle = ::CreateFileMapping(
             file_handle,
             0,
@@ -242,6 +259,12 @@ inline mmap_context memory_remap(
         return {};
     }
 #else // POSIX
+    const auto file_size = detail::query_file_size(file_handle, error);
+    if (error) return {};
+    if (max_file_size > file_size)
+    {    
+        ftruncate(file_handle, max_file_size);
+    }
     char* mapping_start = static_cast<char*>(::mmap(
             old_address,
             length_to_map,
@@ -349,17 +372,11 @@ void basic_mmap<AccessMode, ByteT>::map(const String& path, const size_type offs
         const size_type length, std::error_code& error)
 {
     error.clear();
-    if(detail::empty(path))
-    {
-        error = std::make_error_code(std::errc::invalid_argument);
-        return;
-    }
+    
     const auto handle = detail::open_file(path, AccessMode, error);
     if(error)
-    {
         return;
-    }
-
+    
     map(handle, offset, length, error);
     // This MUST be after the call to map, as that sets this to true.
     if(!error)
@@ -447,6 +464,41 @@ basic_mmap<AccessMode, ByteT>::sync(std::error_code& error)
 }
 
 template<access_mode AccessMode, typename ByteT>
+template<access_mode A>
+typename std::enable_if<A == access_mode::write, void>::type
+basic_mmap<AccessMode, ByteT>::truncate(pointer eof, std::error_code& error)
+{
+    error.clear();
+    if(!is_open())
+    {
+        error = std::make_error_code(std::errc::bad_file_descriptor);
+        return;
+    }
+
+    if (eof == nullptr || eof < data())
+    {
+        error = std::make_error_code(std::errc::invalid_argument);
+        return;
+    }
+
+    if (data())
+    {
+    #ifdef _WIN32
+        LARGE_INTEGER file_offset, file_pointer;
+        file_offset.QuadPart = eof -  data_;
+        if (SetFilePointerEx(file_handle_, file_offset, &file_pointer, FILE_BEGIN) == 0 ||
+            file_pointer.LowPart == INVALID_SET_FILE_POINTER ||
+            SetEndOfFile(file_handle_ == 0)
+    #else // POSIX
+        if (ftruncate(file_handle_, eof -  data_) == -1)
+    #endif
+        {
+            error = detail::last_error();
+        }
+    }
+}
+
+template<access_mode AccessMode, typename ByteT>
 void basic_mmap<AccessMode, ByteT>::unmap()
 {
     if(!is_open()) { return; }
@@ -485,17 +537,12 @@ void basic_mmap<AccessMode, ByteT>::unmap()
 template<access_mode AccessMode, typename ByteT>
 template<access_mode A>
 typename std::enable_if<A == access_mode::write, void>::type
-basic_mmap<AccessMode, ByteT>::remap(const size_type new_offset, size_type new_size, std::error_code& error)
+basic_mmap<AccessMode, ByteT>::remap(const size_type new_offset, size_type new_length, std::error_code& error)
 {
     error.clear();
     if(!is_open()) { return; }
-    
-    const auto file_size = detail::query_file_size(file_handle_, error);
-    if(error)
-    {
-        return;
-    }
 
+    // todo: remove?
 #ifdef _WIN32
     if(is_mapped())
     {
@@ -506,14 +553,8 @@ basic_mmap<AccessMode, ByteT>::remap(const size_type new_offset, size_type new_s
     if(data_) { ::munmap(const_cast<pointer>(get_mapping_start()), mapped_length_); }
 #endif
 
-#ifndef _WIN32
-    if (new_offset + new_size > file_size)
-    {
-        ftruncate(file_handle_, new_offset + new_size);
-    }
-#endif
-
-    const auto ctx = detail::memory_remap(file_handle_, data_, length_, new_offset, new_size, AccessMode, error);
+    const auto ctx = detail::memory_remap(file_handle_, data_,
+        length_, new_offset, new_length, AccessMode, error);
     if(!error)
     {
         is_handle_internal_ = true;

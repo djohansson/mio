@@ -344,13 +344,13 @@ public:
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
-    remap(const size_type new_offset, size_type new_size, std::error_code& error);
+    remap(const size_type new_offset, size_type new_length, std::error_code& error);
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
-    remap(size_type new_size, std::error_code& error)
+    remap(size_type new_length, std::error_code& error)
     {
-        remap(0, new_size, error);
+        remap(0, new_length, error);
     }
 
     void swap(basic_mmap& other);
@@ -359,6 +359,10 @@ public:
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
     sync(std::error_code& error);
+
+    template<access_mode A = AccessMode>
+    typename std::enable_if<A == access_mode::write, void>::type
+    truncate(pointer eof, std::error_code& error);
 
     /**
      * All operators compare the address of the first byte and size of the two mapped

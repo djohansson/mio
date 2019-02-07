@@ -325,6 +325,20 @@ public:
      */
     void unmap() { if(pimpl_) pimpl_->unmap(); }
 
+    template<access_mode A = AccessMode>
+    typename std::enable_if<A == access_mode::write, void>::type
+    remap(const size_type new_offset, size_type new_length, std::error_code& error)
+    {
+        if (pimpl_) pimpl_->remap(new_offset, new_length, error);
+    }
+
+    template<access_mode A = AccessMode>
+    typename std::enable_if<A == access_mode::write, void>::type
+    remap(size_type new_length, std::error_code& error)
+    {
+        if (pimpl_) pimpl_->remap(0, new_length, error);
+    }
+
     void swap(basic_shared_mmap& other) { pimpl_.swap(other.pimpl_); }
 
     /** Flushes the memory mapped page to disk. Errors are reported via `error`. */
@@ -332,6 +346,11 @@ public:
         access_mode A = AccessMode,
         typename = typename std::enable_if<A == access_mode::write>::type
     > void sync(std::error_code& error) { if(pimpl_) pimpl_->sync(error); }
+
+    template<
+        access_mode A = AccessMode,
+        typename = typename std::enable_if<A == access_mode::write>::type
+    > void truncate(pointer eof, std::error_code& error) { if(pimpl_) pimpl_->truncate(eof, error); }
 
     /** All operators compare the underlying `basic_mmap`'s addresses. */
 
