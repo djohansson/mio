@@ -58,18 +58,15 @@ public:
     {
         if constexpr (AccessMode == access_mode::write)
         {
-            if (myEOF != nullptr)
+            std::error_code error;
+            myMap.truncate(pptr(), error);
+            if (error)
             {
-                std::error_code error;
-                myMap.truncate(myEOF, error);
-                if (error)
-                {
-                #ifdef __cpp_exceptions
-                    throw std::system_error(error);
-                #else
-                    perror("truncate");
-                #endif
-                }
+            #ifdef __cpp_exceptions
+                throw std::system_error(error);
+            #else
+                perror("truncate");
+            #endif
             }
         }
     }
@@ -144,7 +141,6 @@ protected:
 
             std::copy(s, s + n, pptr());
             pbump(n);
-            myEOF = pptr();
 
             return n;
         }
@@ -177,7 +173,6 @@ protected:
                     std::ptrdiff_t offset = pptr() - pbase();
                     setp(myMap.data(), myMap.data() + myMap.size());
                     pbump(offset);
-                    myEOF = pptr() + 1;
                     return *pptr() = ch;
                 }
                 // else throw something
@@ -197,10 +192,7 @@ protected:
     int_type pbackfail(int_type ch) override
     {
         if (gptr() == eback())
-        {
-            // todo: remap?
             return traits_type::eof();
-        }
 
         if (ch != traits_type::eof() && ch != gptr()[-1])
         {
@@ -265,7 +257,6 @@ private:
     }
 
     basic_shared_mmap<AccessMode, ByteT> myMap;
-    char_type* myEOF = nullptr;
 };
 
 } // namespace mio
