@@ -10,56 +10,65 @@
 namespace mio
 {
 
-template<access_mode AccessMode, typename ByteT>
-class basic_mmap_streambuf : public std::basic_streambuf<ByteT>
-{
-public:
-	using base_type = std::basic_streambuf<ByteT>;
-    using base_type::eback;
-    using base_type::gptr;
-    using base_type::egptr;
-    using base_type::pbase;
-    using base_type::pptr;
-    using base_type::epptr;
-    using base_type::setg;
-    using base_type::setp;
-    using base_type::gbump;
-    using base_type::pbump;
+// todo: mapped subranges?
 
-    using char_type = typename base_type::char_type;
-	using traits_type = typename base_type::traits_type;
+template<access_mode AccessMode, typename ByteT>
+class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_shared_mmap<AccessMode, ByteT>
+{
+    using streambuf_type = std::basic_streambuf<ByteT>;
+    using streambuf_type::eback;
+    using streambuf_type::gptr;
+    using streambuf_type::egptr;
+    using streambuf_type::pbase;
+    using streambuf_type::pptr;
+    using streambuf_type::epptr;
+    using streambuf_type::setg;
+    using streambuf_type::setp;
+    using streambuf_type::gbump;
+    using streambuf_type::pbump;
+    using mmap_type = basic_shared_mmap<AccessMode, ByteT>;
+    using mmap_type::data;
+    using mmap_type::size;
+    using mmap_type::sync;
+    using mmap_type::remap;
+    using mmap_type::truncate;
+
+public:
+
+    using char_type = typename streambuf_type::char_type;
+	using traits_type = typename streambuf_type::traits_type;
 	using int_type = typename traits_type::int_type;
 	using pos_type = typename traits_type::pos_type;
 	using off_type = typename traits_type::off_type;
 
-    basic_mmap_streambuf() = delete;
-    basic_mmap_streambuf(const basic_mmap_streambuf&) = default;
-    basic_mmap_streambuf(basic_mmap_streambuf&&) = default;
-    basic_mmap_streambuf& operator=(const basic_mmap_streambuf&) = default;
-    basic_mmap_streambuf& operator=(basic_mmap_streambuf&&) = default;
+    mmap_streambuf() = delete;
+    mmap_streambuf(const mmap_streambuf&) = default;
+    mmap_streambuf(mmap_streambuf&&) = default;
+    mmap_streambuf& operator=(const mmap_streambuf&) = default;
+    mmap_streambuf& operator=(mmap_streambuf&&) = default;
 
-	basic_mmap_streambuf(basic_mmap<AccessMode, ByteT>&& m)
-    : myMap(std::move(m))
+	mmap_streambuf(basic_mmap<AccessMode, ByteT>&& m)
+    : mmap_type(std::move(m))
     {
         reset();
     }
 
-    basic_mmap_streambuf(const basic_shared_mmap<AccessMode, ByteT>& m)
-    : myMap(m)
+    mmap_streambuf(const basic_shared_mmap<AccessMode, ByteT>& m)
+    : mmap_type(m)
     {
         reset();
     }
     
 #ifdef __cpp_exceptions
-    ~basic_mmap_streambuf() noexcept(false)
+    ~mmap_streambuf() noexcept(false)
 #else
-    ~basic_mmap_streambuf()
+    ~mmap_streambuf()
 #endif
     {
         if constexpr (AccessMode == access_mode::write)
         {
             std::error_code error;
-            myMap.truncate(pptr(), error);
+            truncate(pptr(), error);
             if (error)
             {
             #ifdef __cpp_exceptions
@@ -82,13 +91,13 @@ protected:
 
         case std::ios_base::cur:
             if (which & std::ios_base::in)
-                off += static_cast<off_type>(gptr() - myMap.data());
+                off += static_cast<off_type>(gptr() - data());
             else
-                off += static_cast<off_type>(pptr() - myMap.data());
+                off += static_cast<off_type>(pptr() - data());
             break;
 
         case std::ios_base::end:
-            off = myMap.size() - off;
+            off = size() - off;
             break;
 
         default:
@@ -104,7 +113,7 @@ protected:
     pos_type seekpos(pos_type pos,
         std::ios_base::openmode which = std::ios_base::in | std::ios_base::out) override
     {
-        if (pos < 0 || !seekptr(const_cast<char_type*>(myMap.data()) + static_cast<ptrdiff_t>(pos), which))
+        if (pos < 0 || !seekptr(const_cast<char_type*>(data()) + static_cast<ptrdiff_t>(pos), which))
 		    return -1;
 
 	    return pos;
@@ -115,7 +124,7 @@ protected:
         if constexpr (AccessMode == access_mode::write)
         {
             std::error_code error;
-            myMap.sync(error);
+            sync(error);
             return error.value();
         }
 
@@ -129,14 +138,14 @@ protected:
             if (epptr() - pptr() < n)
             {
                 std::error_code error;
-                myMap.remap(make_offset_page_aligned(myMap.size() + make_offset_page_aligned(n) + mio::page_size()), error);
+                remap(make_offset_page_aligned(size() + make_offset_page_aligned(n) + mio::page_size()), error);
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(myMap.data(), myMap.data() + myMap.size());
+                    setp(data(), data() + size());
                     pbump(offset);
                 }
-                // else throw something
+                // else throw something?
             }
 
             std::copy(s, s + n, pptr());
@@ -150,7 +159,7 @@ protected:
 
 	std::streamsize xsgetn(char_type* s, std::streamsize n) override
 	{
-        // todo: generate underflow
+        // todo: generate underflow if subrange is mapped
 		std::ptrdiff_t count = std::min(egptr() - gptr(), n);
 
 		std::copy(gptr(), gptr() + count, s);
@@ -167,15 +176,15 @@ protected:
             if constexpr (AccessMode == access_mode::write)
             {
                 std::error_code error;
-                myMap.remap(make_offset_page_aligned(myMap.size() + mio::page_size()), error);
+                remap(make_offset_page_aligned(size() + mio::page_size()), error);
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(myMap.data(), myMap.data() + myMap.size());
+                    setp(data(), data() + size());
                     pbump(offset);
                     return *pptr() = ch;
                 }
-                // else throw something
+                // else throw something?
             }
         }
 
@@ -186,6 +195,7 @@ protected:
 
     int_type underflow() override
     {
+        // needs remap if subrange is mapped
         return (gptr() >= egptr() ? traits_type::eof() : traits_type::to_int_type(*gptr()));
     }
 
@@ -215,11 +225,11 @@ private:
     void reset()
     {
         if constexpr (AccessMode == access_mode::write)
-            setp(myMap.data(), myMap.data() + myMap.size());
+            setp(data(), data() + size());
 
-        setg(const_cast<char_type*>(myMap.data()),
-             const_cast<char_type*>(myMap.data()),
-             const_cast<char_type*>(myMap.data()) + myMap.size());
+        setg(const_cast<char_type*>(data()),
+             const_cast<char_type*>(data()),
+             const_cast<char_type*>(data()) + size());
     }
 
     void* seekptr(void* ptr_, std::ios_base::openmode which)
@@ -230,7 +240,7 @@ private:
         {
             if ((which & std::ios_base::out) && ptr != pptr())
             {
-                if (ptr >= myMap.data() && ptr < epptr())
+                if (ptr >= data() && ptr < epptr())
                 {
                     setp(ptr, epptr());
                 }
@@ -243,7 +253,7 @@ private:
 
         if ((which & std::ios_base::in) && ptr != gptr())
         {
-            if (ptr >= myMap.data() && ptr < egptr())
+            if (ptr >= data() && ptr < egptr())
             {
                 setg(eback(), ptr, egptr());
             }
@@ -255,8 +265,6 @@ private:
 
         return ptr;
     }
-
-    basic_shared_mmap<AccessMode, ByteT> myMap;
 };
 
 } // namespace mio
