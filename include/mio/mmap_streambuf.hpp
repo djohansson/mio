@@ -73,7 +73,7 @@ public:
                 throw std::system_error(std::move(error));
 
             std::ptrdiff_t poffset = pptr() - pbase();
-            setp(data(), data(), data() + size());
+            setp(data(), data() + size());
             pbump(poffset);
 
             std::ptrdiff_t goffset = gptr() - eback();
@@ -150,7 +150,7 @@ protected:
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(data(), data(), data() + size());
+                    setp(data(), data() + size());
                     pbump(offset);
 
                     std::ptrdiff_t goffset = gptr() - eback();
@@ -192,7 +192,7 @@ protected:
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(data(), data(), data() + size());
+                    setp(data(), data() + size());
                     pbump(offset);
 
                     std::ptrdiff_t goffset = gptr() - eback();
@@ -205,7 +205,7 @@ protected:
             }
         }
 
-        setp(nullptr, nullptr, nullptr);
+        setp(nullptr, nullptr);
 		    
         return traits_type::eof();
     }
@@ -242,7 +242,7 @@ private:
     void reset()
     {
         if constexpr (AccessMode == access_mode::write)
-            setp(data(), data(), data() + size());
+            setp(data(), data() + size());
 
         setg(const_cast<char_type*>(data()),
              const_cast<char_type*>(data()),
@@ -258,9 +258,14 @@ private:
             if ((which & std::ios_base::out) && ptr != pptr())
             {
                 if (ptr >= data() && ptr < epptr())
-                    setp(pbase(), ptr, epptr());
+                {
+                    setp(pbase(), epptr());
+                    pbump(ptr - data());
+                }
                 else
+                {
                     return nullptr;
+                }
             }
         }
 
