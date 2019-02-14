@@ -362,7 +362,7 @@ public:
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
-    truncate(pointer eof, std::error_code& error);
+    truncate(size_type file_size, std::error_code& error);
 
     /**
      * All operators compare the address of the first byte and size of the two mapped

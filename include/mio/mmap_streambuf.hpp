@@ -40,6 +40,7 @@ public:
 	using int_type = typename traits_type::int_type;
 	using pos_type = typename traits_type::pos_type;
 	using off_type = typename traits_type::off_type;
+    using size_type = typename mmap_type::size_type;
 
     mmap_streambuf() = delete;
     mmap_streambuf(const mmap_streambuf&) = default;
@@ -58,25 +59,26 @@ public:
     {
         reset();
     }
-    
-#ifdef __cpp_exceptions
-    ~mmap_streambuf() noexcept(false)
-#else
-    ~mmap_streambuf()
-#endif
+
+    void truncate(size_type offset = traits_type::eof())
     {
         if constexpr (AccessMode == access_mode::write)
         {
+            if (offset == traits_type::eof())
+                offset = pptr() - pbase() + 2; // temp - needs to be high watermark instead
+            
             std::error_code error;
-            truncate(pptr(), error);
+            truncate(offset, error);
             if (error)
-            {
-            #ifdef __cpp_exceptions
-                throw std::system_error(error);
-            #else
-                perror("truncate");
-            #endif
-            }
+                throw std::system_error(std::move(error));
+
+            std::ptrdiff_t poffset = pptr() - pbase();
+            setp(data(), data(), data() + size());
+            pbump(poffset);
+
+            std::ptrdiff_t goffset = gptr() - eback();
+            setg(data(), data(), data() + size());
+            gbump(goffset);
         }
     }
 
@@ -119,17 +121,23 @@ protected:
 	    return pos;
     }
 
+    /* syncing the mmap is deferred to mmap its destructor
     int sync() override
     {
+        
         if constexpr (AccessMode == access_mode::write)
         {
             std::error_code error;
-            sync(error);
+            mmap_type::sync(error);
+            // if (error) // called from iostream destructor - should not throw
+            //     throw std::system_error(error);
+
             return error.value();
         }
 
         return 0;
     }
+    */
 
     std::streamsize xsputn(const char_type* s, std::streamsize n) override 
     {
@@ -138,12 +146,16 @@ protected:
             if (epptr() - pptr() < n)
             {
                 std::error_code error;
-                remap(make_offset_page_aligned(size() + make_offset_page_aligned(n) + mio::page_size()), error);
+                remap(make_offset_page_aligned(std::max(2 * size(), static_cast<size_type>(n))), error);
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(data(), data() + size());
+                    setp(data(), data(), data() + size());
                     pbump(offset);
+
+                    std::ptrdiff_t goffset = gptr() - eback();
+                    setg(data(), data(), data() + size());
+                    gbump(goffset);
                 }
                 // else throw something?
             }
@@ -176,19 +188,24 @@ protected:
             if constexpr (AccessMode == access_mode::write)
             {
                 std::error_code error;
-                remap(make_offset_page_aligned(size() + mio::page_size()), error);
+                remap(make_offset_page_aligned(2 * size()), error);
                 if (!error)
                 {
                     std::ptrdiff_t offset = pptr() - pbase();
-                    setp(data(), data() + size());
+                    setp(data(), data(), data() + size());
                     pbump(offset);
+
+                    std::ptrdiff_t goffset = gptr() - eback();
+                    setg(data(), data(), data() + size());
+                    gbump(goffset);
+
                     return *pptr() = ch;
                 }
                 // else throw something?
             }
         }
 
-        setp(nullptr, nullptr);
+        setp(nullptr, nullptr, nullptr);
 		    
         return traits_type::eof();
     }
@@ -225,7 +242,7 @@ private:
     void reset()
     {
         if constexpr (AccessMode == access_mode::write)
-            setp(data(), data() + size());
+            setp(data(), data(), data() + size());
 
         setg(const_cast<char_type*>(data()),
              const_cast<char_type*>(data()),
@@ -241,26 +258,18 @@ private:
             if ((which & std::ios_base::out) && ptr != pptr())
             {
                 if (ptr >= data() && ptr < epptr())
-                {
-                    setp(ptr, epptr());
-                }
+                    setp(pbase(), ptr, epptr());
                 else
-                {
                     return nullptr;
-                }
             }
         }
 
         if ((which & std::ios_base::in) && ptr != gptr())
         {
             if (ptr >= data() && ptr < egptr())
-            {
                 setg(eback(), ptr, egptr());
-            }
             else
-            {
                 return nullptr;
-            }
         }
 
         return ptr;

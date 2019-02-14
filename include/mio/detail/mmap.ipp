@@ -149,10 +149,18 @@ file_handle_type open_file(const String& path, const access_mode mode,
     {
         if (query_file_size(handle, error) == 0 && !error)
         {
+#ifdef _WIN32
+            void* buffer = ::_alloca(page_size());
+            DWORD bytesWritten = 0;
+            if (!buffer ||
+                ::WriteFile(handle, buffer, page_size(), &bytesWritten, NULL) == 0 ||
+                bytesWritten != page_size())
+#else  // POSIX
             void* buffer = ::alloca(page_size());
             if (!buffer ||
                 ::write(handle, buffer, page_size()) == -1 ||
                 fchmod(handle, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH) == -1)
+#endif
             {
                 error = detail::last_error();
                 return invalid_handle;
@@ -464,37 +472,43 @@ basic_mmap<AccessMode, ByteT>::sync(std::error_code& error)
 #endif
 }
 
-template<access_mode AccessMode, typename ByteT>
+template <access_mode AccessMode, typename ByteT>
 template<access_mode A>
 typename std::enable_if<A == access_mode::write, void>::type
-basic_mmap<AccessMode, ByteT>::truncate(pointer eof, std::error_code& error)
+basic_mmap<AccessMode, ByteT>::truncate(size_type file_size, std::error_code &error)
 {
-    error.clear();
-    if(!is_open())
+    if constexpr (AccessMode == access_mode::write)
     {
-        error = std::make_error_code(std::errc::bad_file_descriptor);
-        return;
-    }
-
-    if (eof == nullptr || eof < data())
-    {
-        error = std::make_error_code(std::errc::invalid_argument);
-        return;
-    }
-
-    if (data())
-    {
-    #ifdef _WIN32
-        LARGE_INTEGER file_offset, file_pointer;
-        file_offset.QuadPart = eof -  data_;
-        if (SetFilePointerEx(file_handle_, file_offset, &file_pointer, FILE_BEGIN) == 0 ||
-            file_pointer.LowPart == INVALID_SET_FILE_POINTER ||
-            SetEndOfFile(file_handle_ == 0)
-    #else // POSIX
-        if (ftruncate(file_handle_, eof -  data_) == -1)
-    #endif
+        error.clear();
+        if (!is_open())
         {
-            error = detail::last_error();
+            error = std::make_error_code(std::errc::bad_file_descriptor);
+            return;
+        }
+
+        if (data())
+        {
+#ifdef _WIN32
+            if (is_mapped())
+            {
+                ::UnmapViewOfFile(get_mapping_start());
+                ::CloseHandle(file_mapping_handle_);
+                file_mapping_handle_ = invalid_handle;
+            }
+            LARGE_INTEGER file_offset, file_pointer;
+            file_offset.QuadPart = file_size;
+            if (SetFilePointerEx(file_handle_, file_offset, &file_pointer, FILE_BEGIN) == 0 ||
+                file_pointer.LowPart == INVALID_SET_FILE_POINTER ||
+                SetEndOfFile(file_handle_) == 0)
+#else // POSIX
+            if (ftruncate(file_handle_, file_size) == -1)
+#endif
+            {
+                error = detail::last_error();
+            }
+#ifdef _WIN32
+            remap(file_size, error);
+#endif
         }
     }
 }

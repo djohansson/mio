@@ -350,7 +350,7 @@ public:
     template<
         access_mode A = AccessMode,
         typename = typename std::enable_if<A == access_mode::write>::type
-    > void truncate(pointer eof, std::error_code& error) { if(pimpl_) pimpl_->truncate(eof, error); }
+    > void truncate(size_type file_size, std::error_code& error) { if(pimpl_) pimpl_->truncate(file_size, error); }
 
     /** All operators compare the underlying `basic_mmap`'s addresses. */
 
