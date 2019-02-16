@@ -149,9 +149,9 @@ protected:
                 remap(make_offset_page_aligned(std::max(2 * size(), static_cast<size_type>(n))), error);
                 if (!error)
                 {
-                    std::ptrdiff_t offset = pptr() - pbase();
+                    std::ptrdiff_t poffset = pptr() - pbase();
                     setp(data(), data() + size());
-                    pbump(offset);
+                    pbump(poffset);
 
                     std::ptrdiff_t goffset = gptr() - eback();
                     setg(data(), data(), data() + size());
@@ -191,9 +191,9 @@ protected:
                 remap(make_offset_page_aligned(2 * size()), error);
                 if (!error)
                 {
-                    std::ptrdiff_t offset = pptr() - pbase();
+                    std::ptrdiff_t poffset = pptr() - pbase();
                     setp(data(), data() + size());
-                    pbump(offset);
+                    pbump(poffset);
 
                     std::ptrdiff_t goffset = gptr() - eback();
                     setg(data(), data(), data() + size());
