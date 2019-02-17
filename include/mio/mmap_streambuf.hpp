@@ -62,13 +62,13 @@ public:
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
-    truncate(off_type offset = traits_type::eof())
+    truncate(pos_type pos = traits_type::eof())
     {
-        if (offset == traits_type::eof())
-            offset = pptr() - pbase() + 2;//offset = state.high_water;
+        if (pos == traits_type::eof())
+            pos = seekoff(0, std::ios_base::cur);
         
         std::error_code error;
-        truncate(offset, error);
+        truncate(pos, error);
         if (error)
             throw std::system_error(std::move(error));
 
@@ -85,10 +85,17 @@ protected:
             break;
 
         case std::ios_base::cur:
-            if (which & std::ios_base::in)
-                off += static_cast<off_type>(gptr() - data());
+            if constexpr (AccessMode == access_mode::write)
+            {
+                if (which & std::ios_base::out)
+                {
+                    off += static_cast<off_type>(pptr() - data());
+                }
+            }
             else
-                off += static_cast<off_type>(pptr() - data());
+            {
+                off += static_cast<off_type>(gptr() - data());
+            }
             break;
 
         case std::ios_base::end:
@@ -114,24 +121,6 @@ protected:
 	    return pos;
     }
 
-    /* syncing the mmap is deferred to mmap its destructor
-    int sync() override
-    {
-        
-        if constexpr (AccessMode == access_mode::write)
-        {
-            std::error_code error;
-            mmap_type::sync(error);
-            // if (error) // called from iostream destructor - should not throw
-            //     throw std::system_error(error);
-
-            return error.value();
-        }
-
-        return 0;
-    }
-    */
-
     std::streamsize xsputn(const char_type* s, std::streamsize n) override 
     {
         if constexpr (AccessMode == access_mode::write)
@@ -148,7 +137,7 @@ protected:
 
             std::copy(s, s + n, pptr());
             pbump(n);
-            chwbump(n);
+            //chwbump(n);
 
             return n;
         }
@@ -178,7 +167,7 @@ protected:
                 if (!error)
                 {
                     resetptrs();
-                    chwbump(pptr() - pbase());
+                    //chwbump(pptr() - pbase());
                     return *pptr() = ch;
                 }
                 else
@@ -227,7 +216,7 @@ private:
         if constexpr (AccessMode == access_mode::write)
         {
             off_type poffset = pptr() - pbase();
-            setp(data(), data(), data() + size());
+            setp(data(), data() + size());
             pbump(poffset);
         }
 
@@ -238,7 +227,7 @@ private:
         gbump(goffset);
     }
 
-    void* seekptr(void* ptr_, std::ios_base::openmode which)
+    bool seekptr(void* ptr_, std::ios_base::openmode which)
     {
         char* ptr = static_cast<char*>(ptr_);
         
@@ -253,7 +242,7 @@ private:
                 }
                 else
                 {
-                    return nullptr;
+                    return false;
                 }
             }
         }
@@ -263,22 +252,22 @@ private:
             if (ptr >= data() && ptr < egptr())
                 setg(eback(), ptr, egptr());
             else
-                return nullptr;
+                return false;
         }
 
-        return ptr;
+        return true;
     }
 
-    template<access_mode A = AccessMode>
-    typename std::enable_if<A == access_mode::write, void>::type
-    chwbump(off_t poffset)
-    {
-        if (state.high_water < poffset) state.high_water = poffset;
-    }
+    // template<access_mode A = AccessMode>
+    // typename std::enable_if<A == access_mode::write, void>::type
+    // chwbump(off_t poffset)
+    // {
+    //     if (state.high_water < poffset) state.high_water = poffset;
+    // }
 
-    struct ReadAccessState {};
-    struct WriteAccessState { off_type high_water = 0; };
-    std::conditional_t<AccessMode == access_mode::write, WriteAccessState, ReadAccessState> state;
+    // struct ReadAccessState {};
+    // struct WriteAccessState { off_type high_water = 0; };
+    // std::conditional_t<AccessMode == access_mode::write, WriteAccessState, ReadAccessState> state;
 };
 
 } // namespace mio
