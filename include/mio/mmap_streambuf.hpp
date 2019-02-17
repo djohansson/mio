@@ -188,7 +188,7 @@ protected:
             }
         }
 
-        setp(nullptr, nullptr, nullptr);
+        setp(nullptr, nullptr);
 		    
         return traits_type::eof();
     }
@@ -247,9 +247,14 @@ private:
             if ((which & std::ios_base::out) && ptr != pptr())
             {
                 if (ptr >= data() && ptr < epptr())
-                    setp(pbase(), ptr, epptr());
+                {
+                    setp(pbase(), epptr());
+                    pbump(ptr - data());
+                }
                 else
+                {
                     return nullptr;
+                }
             }
         }
 

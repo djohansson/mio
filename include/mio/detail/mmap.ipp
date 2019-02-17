@@ -271,6 +271,7 @@ inline mmap_context memory_remap(
     if (error) return {};
     if (max_file_size > file_size)
     {    
+        //fallocate(file_handle, max_file_size); // todo: implement this if supported
         ftruncate(file_handle, max_file_size);
     }
     char* mapping_start = static_cast<char*>(::mmap(
