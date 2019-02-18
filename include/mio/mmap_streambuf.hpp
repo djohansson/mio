@@ -65,7 +65,7 @@ public:
     truncate(pos_type pos = traits_type::eof())
     {
         if (pos == traits_type::eof())
-            pos = seekoff(0, std::ios_base::cur);
+            pos = state.high_water;
         
         std::error_code error;
         truncate(pos, error);
@@ -85,17 +85,10 @@ protected:
             break;
 
         case std::ios_base::cur:
-            if constexpr (AccessMode == access_mode::write)
-            {
-                if (which & std::ios_base::out)
-                {
-                    off += static_cast<off_type>(pptr() - data());
-                }
-            }
+            if (which & std::ios_base::out)
+                off += static_cast<off_type>(pptr() - pbase());
             else
-            {
-                off += static_cast<off_type>(gptr() - data());
-            }
+                off += static_cast<off_type>(gptr() - eback());
             break;
 
         case std::ios_base::end:
@@ -121,6 +114,14 @@ protected:
 	    return pos;
     }
 
+    int sync() override
+    {
+        if constexpr (AccessMode == access_mode::write)
+            phwset(pptr() - pbase());
+
+        return 0;
+    }
+
     std::streamsize xsputn(const char_type* s, std::streamsize n) override 
     {
         if constexpr (AccessMode == access_mode::write)
@@ -137,7 +138,7 @@ protected:
 
             std::copy(s, s + n, pptr());
             pbump(n);
-            //chwbump(n);
+            phwset(pptr() - pbase());
 
             return n;
         }
@@ -167,7 +168,7 @@ protected:
                 if (!error)
                 {
                     resetptrs();
-                    //chwbump(pptr() - pbase());
+                    phwset(pptr() - pbase());
                     return *pptr() = ch;
                 }
                 else
@@ -218,6 +219,7 @@ private:
             off_type poffset = pptr() - pbase();
             setp(data(), data() + size());
             pbump(poffset);
+            phwset(poffset);
         }
 
         off_type goffset = gptr() - eback();
@@ -235,10 +237,12 @@ private:
         {
             if ((which & std::ios_base::out) && ptr != pptr())
             {
-                if (ptr >= data() && ptr < epptr())
+                if (ptr >= pbase() && ptr < epptr())
                 {
+                    off_type poffset = ptr - pbase();
                     setp(pbase(), epptr());
-                    pbump(ptr - data());
+                    pbump(poffset);
+                    phwset(poffset);
                 }
                 else
                 {
@@ -258,16 +262,17 @@ private:
         return true;
     }
 
-    // template<access_mode A = AccessMode>
-    // typename std::enable_if<A == access_mode::write, void>::type
-    // chwbump(off_t poffset)
-    // {
-    //     if (state.high_water < poffset) state.high_water = poffset;
-    // }
+    template<access_mode A = AccessMode>
+    typename std::enable_if<A == access_mode::write, void>::type
+    phwset(off_type poffset)
+    {
+        if (state.high_water < poffset)
+            state.high_water = poffset;
+    }
 
-    // struct ReadAccessState {};
-    // struct WriteAccessState { off_type high_water = 0; };
-    // std::conditional_t<AccessMode == access_mode::write, WriteAccessState, ReadAccessState> state;
+    struct ReadAccessState {};
+    struct WriteAccessState { off_type high_water = 0; };
+    std::conditional_t<AccessMode == access_mode::write, WriteAccessState, ReadAccessState> state;
 };
 
 } // namespace mio
