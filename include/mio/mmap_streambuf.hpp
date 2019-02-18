@@ -12,7 +12,7 @@ namespace mio
 
 // todo: mapped subranges?
 
-template<access_mode AccessMode, typename ByteT>
+template<access_mode AccessMode, typename ByteT = char>
 class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_shared_mmap<AccessMode, ByteT>
 {
     using streambuf_type = std::basic_streambuf<ByteT>;
@@ -59,6 +59,15 @@ public:
     {
         resetptrs();
     }
+
+#ifdef __cpp_exceptions
+    template<typename String>
+    mmap_streambuf(const String& path, const size_type offset = 0, const size_type length = map_entire_file)
+    : mmap_type(path, offset, length)
+    {
+        resetptrs();
+    }
+#endif
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
@@ -274,6 +283,10 @@ private:
     struct WriteAccessState { off_type high_water = 0; };
     std::conditional_t<AccessMode == access_mode::write, WriteAccessState, ReadAccessState> state;
 };
+
+using mmap_istreambuf = mmap_streambuf<access_mode::read>;
+using mmap_iostreambuf = mmap_streambuf<access_mode::write>;
+using mmap_ostreambuf = mmap_iostreambuf;
 
 } // namespace mio
 
