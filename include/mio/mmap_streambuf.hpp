@@ -71,7 +71,7 @@ public:
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
-    truncate(pos_type pos = traits_type::eof())
+    truncate(off_type pos = off_type(-1))
     {
         if (pos == traits_type::eof())
             pos = state.high_water;
