@@ -138,7 +138,8 @@ protected:
             if (epptr() - pptr() < n)
             {
                 std::error_code error;
-                remap(make_offset_page_aligned(std::max(2 * size(), static_cast<size_type>(n))), error);
+                off_type poffset = pptr() - pbase();
+                remap(std::max(2 * size(), page_size() + make_offset_page_aligned(static_cast<size_type>(poffset + n))), error);
                 if (!error)
                     resetptrs();
                 else
