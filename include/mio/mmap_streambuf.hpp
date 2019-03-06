@@ -67,7 +67,6 @@ public:
     {
         resetptrs();
     }
-#endif
 
     template<access_mode A = AccessMode>
     typename std::enable_if<A == access_mode::write, void>::type
@@ -75,14 +74,20 @@ public:
     {
         if (pos == traits_type::eof())
             pos = state.high_water;
-        
+
         std::error_code error;
+        
         truncate(pos, error);
+        if (error)
+            throw std::system_error(std::move(error));
+
+        mmap_type::sync(error);
         if (error)
             throw std::system_error(std::move(error));
 
         resetptrs();
     }
+#endif
 
 protected:
     pos_type seekoff(off_type off, std::ios_base::seekdir dir,
@@ -126,7 +131,14 @@ protected:
     int sync() override
     {
         if constexpr (AccessMode == access_mode::write)
+        {
             phwset(pptr() - pbase());
+
+            std::error_code error;
+            mmap_type::sync(error);
+            if (error)
+                return -1; // not allowed to throw according to spec (called from destructor)
+        }
 
         return 0;
     }
