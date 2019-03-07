@@ -1,19 +1,21 @@
 #ifndef MIO_MMAP_STREAMBUF_HEADER
 #define MIO_MMAP_STREAMBUF_HEADER
 
+#include <cassert>
 #include <algorithm>
 #include <streambuf>
 
 #include "page.hpp"
-#include "shared_mmap.hpp"
+#include "mmap.hpp"
 
 namespace mio
 {
 
+// todo: support all std::ios_base::openmode flags. right now it truncates.
 // todo: mapped subranges?
 
 template<access_mode AccessMode, typename ByteT = char>
-class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_shared_mmap<AccessMode, ByteT>
+class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_mmap<AccessMode, ByteT>
 {
     using streambuf_type = std::basic_streambuf<ByteT>;
     using streambuf_type::eback;
@@ -26,11 +28,11 @@ class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_shared_m
     using streambuf_type::setp;
     using streambuf_type::gbump;
     using streambuf_type::pbump;
-    using mmap_type = basic_shared_mmap<AccessMode, ByteT>;
+    using mmap_type = basic_mmap<AccessMode, ByteT>;
     using mmap_type::data;
     using mmap_type::size;
-    using mmap_type::sync;
     using mmap_type::remap;
+    using mmap_type::sync;
     using mmap_type::truncate;
 
 public:
@@ -54,34 +56,21 @@ public:
         resetptrs();
     }
 
-    mmap_streambuf(const basic_shared_mmap<AccessMode, ByteT>& m)
-    : mmap_type(m)
-    {
-        resetptrs();
-    }
-
-#ifdef __cpp_exceptions
     template<typename String>
     mmap_streambuf(const String& path, const size_type offset = 0, const size_type length = map_entire_file)
     : mmap_type(path, offset, length)
     {
         resetptrs();
     }
-#endif
 
-    template<access_mode A = AccessMode>
-    typename std::enable_if<A == access_mode::write, void>::type
-    truncate(off_type pos = off_type(-1))
+    virtual ~mmap_streambuf()
     {
-        if (pos == traits_type::eof())
-            pos = state.high_water;
-        
-        std::error_code error;
-        truncate(pos, error);
-        if (error)
-            throw std::system_error(std::move(error));
-
-        resetptrs();
+        if constexpr (AccessMode == access_mode::write)
+        {
+            std::error_code error;
+            truncate(state.high_water, error);
+            assert(!error);
+        }
     }
 
 protected:
@@ -126,7 +115,7 @@ protected:
     int sync() override
     {
         if constexpr (AccessMode == access_mode::write)
-            phwset(pptr() - pbase());
+            resetptrs();
 
         return 0;
     }
@@ -140,10 +129,10 @@ protected:
                 std::error_code error;
                 off_type poffset = pptr() - pbase();
                 remap(std::max(2 * size(), page_size() + make_offset_page_aligned(static_cast<size_type>(poffset + n))), error);
-                if (!error)
-                    resetptrs();
-                else
-                    return 0;
+                if (error)
+                    throw std::system_error(std::move(error));
+
+                resetptrs();
             }
 
             std::copy(s, s + n, pptr());
@@ -173,18 +162,22 @@ protected:
         {
             if constexpr (AccessMode == access_mode::write)
             {
-                std::error_code error;
-                remap(make_offset_page_aligned(2 * size()), error);
-                if (!error)
+                if (epptr() - pptr() < 1)
                 {
+                    std::error_code error;
+                    off_type poffset = pptr() - pbase();
+                    remap(std::max(2 * size(), page_size() + make_offset_page_aligned(static_cast<size_type>(poffset))), error);
+                    if (error)
+                        throw std::system_error(std::move(error));
+
                     resetptrs();
-                    phwset(pptr() - pbase());
-                    return *pptr() = ch;
                 }
-                else
-                {
-                    throw std::system_error(std::move(error));
-                }
+
+                *pptr() = ch;
+                pbump(1);
+                phwset(pptr() - pbase());
+
+                return ch;
             }
         }
 
@@ -207,9 +200,7 @@ protected:
         if (ch != traits_type::eof() && ch != gptr()[-1])
         {
             auto retval = gptr()[-1] = ch;
-            
             setg(eback(), gptr() - 1, egptr());
-
             return traits_type::to_int_type(retval);
         }
 
@@ -230,13 +221,21 @@ private:
             setp(data(), data() + size());
             pbump(poffset);
             phwset(poffset);
-        }
 
-        off_type goffset = gptr() - eback();
-        setg(const_cast<char_type*>(data()),
-             const_cast<char_type*>(data()),
-             const_cast<char_type*>(data()) + size());
-        gbump(goffset);
+            off_type goffset = gptr() - eback();
+            setg(const_cast<char_type*>(data()),
+                const_cast<char_type*>(data()),
+                const_cast<char_type*>(data()) + state.high_water);
+            gbump(goffset);
+        }
+        else
+        {
+            off_type goffset = gptr() - eback();
+            setg(const_cast<char_type*>(data()),
+                const_cast<char_type*>(data()),
+                const_cast<char_type*>(data()) + size());
+            gbump(goffset);
+        }
     }
 
     bool seekptr(void* ptr_, std::ios_base::openmode which)
