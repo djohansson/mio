@@ -67,9 +67,12 @@ public:
     {
         if constexpr (AccessMode == access_mode::write)
         {
-            std::error_code error;
-            truncate(state.high_water, error);
-            assert(!error);
+            if (state.high_water > 0)
+            {
+                std::error_code error;
+                truncate(state.high_water, error);
+                assert(!error);
+            }
         }
     }
 
