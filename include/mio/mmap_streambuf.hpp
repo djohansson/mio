@@ -265,7 +265,7 @@ private:
 
         if ((which & std::ios_base::in) && ptr != gptr())
         {
-            if (ptr >= data() && ptr < egptr())
+            if (ptr >= data() && ptr <= egptr())
                 setg(eback(), ptr, egptr());
             else
                 return false;
