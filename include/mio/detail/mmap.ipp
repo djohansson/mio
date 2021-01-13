@@ -26,6 +26,7 @@
 #include "mio/detail/string_util.hpp"
 
 #include <algorithm>
+#include <vector>
 
 #ifndef _WIN32
 # include <unistd.h>
@@ -52,6 +53,16 @@ inline DWORD int64_low(int64_t n) noexcept
     return n & 0xffffffff;
 }
 
+std::wstring s_2_ws(const std::string& s)
+{
+    if (s.empty())
+        return{};
+    const auto s_length = static_cast<int>(s.length());
+    auto buf = std::vector<wchar_t>(s_length);
+    const auto wide_char_count = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), s_length, buf.data(), s_length);
+    return std::wstring(buf.data(), wide_char_count);
+}
+
 template<
     typename String,
     typename = typename std::enable_if<
@@ -59,7 +70,7 @@ template<
     >::type
 > file_handle_type open_file_helper(const String& path, const access_mode mode)
 {
-    return ::CreateFileA(c_str(path),
+    return ::CreateFileW(s_2_ws(path).c_str(),
             mode == access_mode::read ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             0,
@@ -208,6 +219,8 @@ inline mmap_context memory_map(const file_handle_type file_handle, const int64_t
             length_to_map));
     if(mapping_start == nullptr)
     {
+        // Close file handle if mapping it failed.
+        ::CloseHandle(file_mapping_handle);
         error = detail::last_error();
         return {};
     }
@@ -530,9 +543,10 @@ void basic_mmap<AccessMode, ByteT>::unmap()
     if(data_) { ::munmap(const_cast<pointer>(get_mapping_start()), mapped_length_); }
 #endif
 
-    // If file_handle_ was obtained by our opening it (when map is called with a path,
-    // rather than an existing file handle), we need to close it, otherwise it must not
-    // be closed as it may still be used outside this instance.
+    // If `file_handle_` was obtained by our opening it (when map is called with
+    // a path, rather than an existing file handle), we need to close it,
+    // otherwise it must not be closed as it may still be used outside this
+    // instance.
     if(is_handle_internal_)
     {
 #ifdef _WIN32
@@ -600,14 +614,14 @@ void basic_mmap<AccessMode, ByteT>::swap(basic_mmap& other)
     if(this != &other)
     {
         using std::swap;
-        swap(data_, other.data_); 
-        swap(file_handle_, other.file_handle_); 
+        swap(data_, other.data_);
+        swap(file_handle_, other.file_handle_);
 #ifdef _WIN32
-        swap(file_mapping_handle_, other.file_mapping_handle_); 
+        swap(file_mapping_handle_, other.file_mapping_handle_);
 #endif
-        swap(length_, other.length_); 
-        swap(mapped_length_, other.mapped_length_); 
-        swap(is_handle_internal_, other.is_handle_internal_); 
+        swap(length_, other.length_);
+        swap(mapped_length_, other.mapped_length_);
+        swap(is_handle_internal_, other.is_handle_internal_);
     }
 }
 

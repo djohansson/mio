@@ -4,15 +4,16 @@
 #include <string>
 #include <fstream>
 #include <cstdlib>
+#include <iostream>
 #include <cassert>
 #include <system_error>
+#include <numeric>
 
-int handle_error(const std::error_code& error)
-{
-    const auto& errmsg = error.message();
-    std::printf("error mapping file: %s, exiting...\n", errmsg.c_str());
-    return error.value();
-}
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#endif
 
 // Just make sure this compiles.
 #ifdef CXX17
@@ -20,82 +21,58 @@ int handle_error(const std::error_code& error)
 using mmap_source = mio::basic_mmap_source<std::byte>;
 #endif
 
+template<class MMap>
+void test_at_offset(const MMap& file_view, const std::string& buffer,
+        const size_t offset);
+void test_at_offset(const std::string& buffer, const char* path,
+        const size_t offset, std::error_code& error);
+int handle_error(const std::error_code& error);
+
 int main()
 {
-    const char _path[] = "test-file";
+    std::error_code error;
+
     // Make sure mio compiles with non-const char* strings too.
+    const char _path[] = "test-file";
     const int path_len = sizeof(_path);
     char* path = new char[path_len];
     std::copy(_path, _path + path_len, path);
-    std::error_code error;
+
+    const auto page_size = mio::page_size();
     // Fill buffer, then write it to file.
-    std::string buffer(0x4000 - 250, 'M');
+    const int file_size = 4 * page_size - 250; // 16134, if page size is 4KiB
+    std::string buffer(file_size, 0);
+    // Start at first printable ASCII character.
+    char v = 33;
+    for (auto& b : buffer) {
+       b = v;
+       ++v; 
+       // Limit to last printable ASCII character.
+       v %= 126;
+       if(v == 0) {
+           v = 33;
+       }
+    }
+
     std::ofstream file(path);
     file << buffer;
     file.close();
 
-    {
-        // Map the region of the file to which buffer was written.
-        mio::mmap_source file_view = mio::make_mmap_source(
-                path, 0, mio::map_entire_file, error);
-        if(error) { return handle_error(error); }
+    // Test whole file mapping.
+    test_at_offset(buffer, path, 0, error);
+    if (error) { return handle_error(error); }
 
-        assert(file_view.is_open());
-        assert(file_view.size() == buffer.size());
+    // Test starting from below the page size.
+    test_at_offset(buffer, path, page_size - 3, error);
+    if (error) { return handle_error(error); }
 
-        // Then verify that mmap's bytes correspond to that of buffer.
-        for(auto i = 0; i < buffer.size(); ++i) {
-            if(file_view[i] != buffer[i]) {
-                std::printf("%ith byte mismatch: expected(%i) <> actual(%i)",
-                        i, buffer[i], file_view[i]);
-                assert(0);
-            }
-        }
+    // Test starting from above the page size.
+    test_at_offset(buffer, path, page_size + 3, error);
+    if (error) { return handle_error(error); }
 
-        // Turn file_view into a shared mmap.
-        mio::shared_mmap_source shared_file_view(std::move(file_view));
-
-        assert(!file_view.is_open());
-        assert(shared_file_view.is_open());
-        assert(shared_file_view.size() == buffer.size());
-
-        // Then verify that mmap's bytes correspond to that of buffer.
-        for(auto i = 0; i < buffer.size(); ++i) {
-            if(shared_file_view[i] != buffer[i]) {
-                std::printf("%ith byte mismatch: expected(%i) <> actual(%i)",
-                        i, buffer[i], shared_file_view[i]);
-                assert(0);
-            }
-        }
-
-        shared_file_view.unmap();
-
-        mio::mmap_sink rw_file_view = mio::make_mmap_sink(
-                path, 0, mio::map_entire_file, error);
-
-        if(error) { return handle_error(error); }
-
-        assert(!shared_file_view.is_open());
-        assert(rw_file_view.is_open());
-        assert(rw_file_view.size() == buffer.size());
-
-        buffer = buffer.substr(0x2000, std::string::npos);
-        buffer[buffer.size()-1] = 'N';
-        buffer.append("N");
-
-        rw_file_view.remap(0x2000, buffer.size(), error);
-
-        strcpy(rw_file_view.begin(), buffer.c_str());
-
-        // Then verify that mmap's bytes correspond to that of buffer.
-        for(auto i = 0; i < buffer.size(); ++i) {
-            if(rw_file_view[i] != buffer[i]) {
-                std::printf("%ith byte mismatch: expected(%i) <> actual(%i)",
-                        i, buffer[i], rw_file_view[i]);
-                assert(0);
-            }
-        }
-    }
+    // Test starting from above the page size.
+    test_at_offset(buffer, path, 2 * page_size + 3, error);
+    if (error) { return handle_error(error); }
 
     {
 #define CHECK_INVALID_MMAP(m) do { \
@@ -125,8 +102,8 @@ int main()
         CHECK_INVALID_MMAP(m);
     }
 
+    // Make sure these compile.
     {
-        // Make sure these compile.
         mio::ummap_source _1;
         mio::shared_ummap_source _2;
         // Make sure shared_mmap mapping compiles as all testing was done on
@@ -143,8 +120,63 @@ int main()
         auto _8 = mio::make_mmap_source(wpath2, error);
         mio::mmap_source _9;
         _9.map(wpath1, error);
+#else
+        const int fd = open(path, O_RDONLY);
+        mio::mmap_source _fdmmap(fd, 0, mio::map_entire_file);
+        _fdmmap.unmap();
+        _fdmmap.map(fd, error);
 #endif
     }
 
     std::printf("all tests passed!\n");
+}
+
+void test_at_offset(const std::string& buffer, const char* path,
+        const size_t offset, std::error_code& error)
+{
+    // Sanity check.
+    assert(offset < buffer.size());
+
+    // Map the region of the file to which buffer was written.
+    mio::mmap_source file_view = mio::make_mmap_source(
+            path, offset, mio::map_entire_file, error);
+    if(error) { return; }
+
+    assert(file_view.is_open());
+    const size_t mapped_size = buffer.size() - offset;
+    assert(file_view.size() == mapped_size);
+
+    test_at_offset(file_view, buffer, offset);
+
+    // Turn file_view into a shared mmap.
+    mio::shared_mmap_source shared_file_view(std::move(file_view));
+    assert(!file_view.is_open());
+    assert(shared_file_view.is_open());
+    assert(shared_file_view.size() == mapped_size);
+
+    //test_at_offset(shared_file_view, buffer, offset);
+}
+
+template<class MMap>
+void test_at_offset(const MMap& file_view, const std::string& buffer,
+        const size_t offset)
+{
+    // Then verify that mmap's bytes correspond to that of buffer.
+    for(size_t buf_idx = offset, view_idx = 0;
+            buf_idx < buffer.size() && view_idx < file_view.size();
+            ++buf_idx, ++view_idx) {
+        if(file_view[view_idx] != buffer[buf_idx]) {
+            std::printf("%luth byte mismatch: expected(%d) <> actual(%d)",
+                    buf_idx, buffer[buf_idx], file_view[view_idx]);
+            std::cout << std::flush;
+            assert(0);
+        }
+    }
+}
+
+int handle_error(const std::error_code& error)
+{
+    const auto& errmsg = error.message();
+    std::printf("Error mapping file: %s, exiting...\n", errmsg.c_str());
+    return error.value();
 }

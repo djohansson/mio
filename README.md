@@ -59,6 +59,7 @@ Moreover, in each case, you can provide either some string type for the file's p
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <mio/mmap.hpp>
+// #include <mio/mio.hpp> if using single header
 #include <algorithm>
 
 int main()
@@ -78,6 +79,7 @@ for functions where character strings are expected (e.g. path parameters).
 
 ```c++
 #include <mio/mmap.hpp>
+// #include <mio/mio.hpp> if using single header
 #include <system_error> // for std::error_code
 #include <cstdio> // for std::printf
 #include <cassert>
@@ -180,6 +182,12 @@ using mmap_sink = mio::basic_mmap_sink<std::byte>;
 ```
 
 Though generally not needed, since mio maps users requested offsets to page boundaries, you can query the underlying system's page allocation granularity by invoking `mio::page_size()`, which is located in `mio/page.hpp`.
+
+### Single Header File 
+Mio can be added to your project as a single header file simply by including `\single_include\mio\mio.hpp`. Single header files can be regenerated at any time by running the `amalgamate.py` script within `\third_party`.  
+```
+python amalgamate.py -c config.json -s ../include
+```
 
 ## CMake
 As a header-only library, mio has no compiled components. Nevertheless, a [CMake](https://cmake.org/overview/) build system is provided to allow easy testing, installation, and subproject composition on many platforms and operating systems.
@@ -328,3 +336,4 @@ target_link_libraries( MyTarget PUBLIC <mio::mio | mio> )
 ```
 
 Note that, as a subproject, mio's tests and examples will not be built and CPack integration is deferred to the host project.
+
