@@ -167,7 +167,7 @@ void test_at_offset(const MMap& file_view, const std::string& buffer,
             ++buf_idx, ++view_idx) {
         if(file_view[view_idx] != buffer[buf_idx]) {
             std::printf("%luth byte mismatch: expected(%d) <> actual(%d)",
-                    buf_idx, buffer[buf_idx], file_view[view_idx]);
+                    static_cast<unsigned long>(buf_idx), buffer[buf_idx], file_view[view_idx]);
             std::cout << std::flush;
             assert(0);
         }
