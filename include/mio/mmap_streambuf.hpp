@@ -13,6 +13,7 @@ namespace mio
 
 // todo: support all std::ios_base::openmode flags. right now it truncates.
 // todo: mapped subranges?
+// todo: coroutines + check committed/avaliable pages
 
 template<access_mode AccessMode, typename ByteT = char>
 class mmap_streambuf : public std::basic_streambuf<ByteT>, public basic_mmap<AccessMode, ByteT>
@@ -50,7 +51,7 @@ public:
     mmap_streambuf& operator=(const mmap_streambuf&) = default;
     mmap_streambuf& operator=(mmap_streambuf&&) = default;
 
-	mmap_streambuf(basic_mmap<AccessMode, ByteT>&& m)
+	mmap_streambuf(mmap_type&& m)
     : mmap_type(std::move(m))
     {
         resetptrs();
@@ -58,10 +59,8 @@ public:
 
     template<typename String>
     mmap_streambuf(const String& path, const size_type offset = 0, const size_type length = map_entire_file)
-    : mmap_type(path, offset, length)
-    {
-        resetptrs();
-    }
+    : mmap_streambuf(mmap_type(path, offset, length))
+    {}
 
     virtual ~mmap_streambuf()
     {
@@ -77,6 +76,7 @@ public:
     }
 
 protected:
+
     pos_type seekoff(off_type off, std::ios_base::seekdir dir,
         std::ios_base::openmode which = std::ios_base::in | std::ios_base::out) override
     {
@@ -216,6 +216,7 @@ protected:
     }
 
 private:
+
     void resetptrs()
     {
         if constexpr (AccessMode == access_mode::write)
