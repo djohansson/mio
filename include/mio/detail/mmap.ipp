@@ -53,6 +53,18 @@ inline DWORD int64_low(int64_t n) noexcept
     return n & 0xffffffff;
 }
 
+inline std::wstring s_2_ws(const std::string& s)
+{
+    std::wstring ret;
+    if (!s.empty())
+    {
+        ret.resize(s.size());
+        int wide_char_count = MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+            static_cast<int>(s.size()), &ret[0], static_cast<int>(s.size()));
+        ret.resize(wide_char_count);
+    }
+    return ret;
+}
 
 template<
     typename String,
