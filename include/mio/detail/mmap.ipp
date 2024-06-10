@@ -522,11 +522,8 @@ basic_mmap<AccessMode, ByteT>::truncate(size_type file_size, std::error_code &er
             {
                 error = detail::last_error();
             }
-#ifdef _WIN32
+            
             remap(file_size, error);
-#else
-            length_ = file_size;
-#endif
         }
     }
 }
